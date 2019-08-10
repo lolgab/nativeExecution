@@ -26,9 +26,9 @@ object Await {
   @throws(classOf[InterruptedException])
   def ready[T](awaitable: Awaitable[T], atMost: Duration): awaitable.type =  {
     val time = System.currentTimeMillis()
-    while(System.currentTimeMillis() < time + atMost.toMillis && Loop.default.isAlive)
+    while(System.currentTimeMillis() < time + atMost.toMillis && !awaitable.asInstanceOf[Future[T]].isCompleted)
       Loop.default.run(RunMode.NoWait)
-    awaitable.ready(atMost)(AwaitPermission)
+    awaitable.ready(0.nano)(AwaitPermission)
   }
   /**
    * Await and return the result (of type `T`) of an `Awaitable`.
@@ -50,8 +50,8 @@ object Await {
   @throws(classOf[Exception])
   def result[T](awaitable: Awaitable[T], atMost: Duration): T = {
     val time = System.currentTimeMillis()
-    while(System.currentTimeMillis() < time + atMost.toMillis && Loop.default.isAlive)
+    while(System.currentTimeMillis() < time + atMost.toMillis && !awaitable.asInstanceOf[Future[T]].isCompleted)
       Loop.default.run(RunMode.NoWait)
-    awaitable.result(atMost)(AwaitPermission)
+    awaitable.result(0.nano)(AwaitPermission)
   }
 }
