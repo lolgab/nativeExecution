@@ -41,4 +41,6 @@ object CApi {
   def uv_timer_init(loop: Ptr[Byte], timer: Ptr[Byte]): CInt = extern
   def uv_timer_start(timer: Ptr[Byte], cb: CFuncPtr1[Ptr[Byte], Unit], timeout: CLong, repeat: CLong): CInt = extern
   def uv_timer_stop(timer: Ptr[Byte]): CInt = extern
+
+  def uv_err_name(err: CInt): CString = extern
 }

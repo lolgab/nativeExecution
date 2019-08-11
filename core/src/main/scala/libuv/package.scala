@@ -4,7 +4,8 @@ import scalanative.libc.stdlib.malloc
 import scala.scalanative.posix.netinet.in._
 import scala.collection.mutable
 import CApi._
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
 
 class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
   def run(runMode: RunMode = RunMode.Default): Int = uv_run(ptr, runMode.value)
@@ -13,7 +14,18 @@ class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
 }
   
 object Loop {
-  Future(Loop.default.run())(scalanative.runtime.ExecutionContext.global)
+  implicit val ec: ExecutionContext = scalanative.runtime.ExecutionContext.global
+  val loopFuture = Future(Loop.default.run())
+  loopFuture onComplete {
+    case Success(returnCode) =>
+      if(returnCode != 0) {
+        System.err.println(libuv.errorMessage(returnCode))
+        System.exit(returnCode)
+      }
+    case Failure(e) =>
+      e.printStackTrace()
+      System.exit(1)
+  }
   val default: Loop = new Loop(uv_default_loop())
 }
 
@@ -222,5 +234,11 @@ object TimerHandle {
   }
   def apply()(implicit z: Zone): TimerHandle = {
     new TimerHandle(z.alloc(uv_handle_size(HandleType.Timer.value)))
+  }
+}
+
+package object libuv {
+  def errorMessage(err: CInt): String = Zone { implicit z =>
+    fromCString(uv_err_name(err))
   }
 }
