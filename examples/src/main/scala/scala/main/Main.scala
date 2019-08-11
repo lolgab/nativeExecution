@@ -1,7 +1,6 @@
 package main
 
 import libuv._
-import libuv.CApi._
 import scalanative.unsafe.Zone
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -39,6 +38,7 @@ object Main {
       } else {
         client.asHandle.close(() => ())
       }
+      tcp.asHandle.close(() => println("tcp closed"))
     }
   }
 }

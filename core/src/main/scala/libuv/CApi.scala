@@ -5,7 +5,7 @@ import scala.scalanative.posix.netinet.in._
 
 @link("uv")
 @extern
-object CApi {
+private [libuv] object CApi {
   type uv_buf_t = CStruct2[Ptr[Byte], CSize]
 
   def uv_default_loop(): Ptr[Byte] = extern

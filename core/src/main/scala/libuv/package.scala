@@ -71,7 +71,7 @@ object RequestType {
   final val GetAddressInfo = new RequestType(8)
   final val GetNameiInfo = new RequestType(9)
 }
-class Buffer private [libuv] (private val ptr: uv_buf_t) extends AnyVal {
+class Buffer private [libuv] (private val ptr: Ptr[uv_buf_t]) extends AnyVal {
   def base = ptr._1
   def len = ptr._2
 
@@ -81,10 +81,10 @@ class Buffer private [libuv] (private val ptr: uv_buf_t) extends AnyVal {
   def asBuffers: Buffers = new Buffers(ptr.asInstanceOf[Ptr[uv_buf_t]])
 }
 object Buffer {
-  def apply()(implicit z: Zone) = new Buffer(z.alloc(sizeof[uv_buf_t]).asInstanceOf[uv_buf_t])
+  def apply()(implicit z: Zone) = new Buffer(z.alloc(sizeof[uv_buf_t]).asInstanceOf[Ptr[uv_buf_t]])
 }
 class Buffers private [libuv] (private[libuv] val ptr: Ptr[uv_buf_t]) extends AnyVal {
-  def apply(n: Int): Buffer = new Buffer(ptr(n))
+  def apply(n: Int): Buffer = new Buffer(ptr + n)
 }
 class Write private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal
 object Write {
@@ -92,7 +92,7 @@ object Write {
     new Write(z.alloc(uv_req_size(RequestType.Write.value)))
   }
 }
-class Handle private[libuv] (private val ptr: Ptr[Byte]) {
+class Handle private[libuv] (private val ptr: Ptr[Byte]) extends AnyVal {
   def close(afterClose: () => Unit): Unit = {
     Handle.afterCloses(ptr.toLong) = afterClose
     uv_close(ptr, Handle.closeCallback)
@@ -108,36 +108,30 @@ object Handle {
   }
 }
 
-class Stream private[libuv] (private val ptr: Ptr[Byte]) {
-  private var onConnection: Int => Unit = (_: Int) => ()
-  private var onRead: (Buffer, CSize) => Unit = (_: Buffer, _: CSize) => ()
+class Stream private[libuv] (private val ptr: Ptr[Byte]) extends AnyVal {
   def listen(backlog: Int = 128)(onConnection: Int => Unit): Int = {
-    this.onConnection = onConnection
-    Stream.streams += ptr.toLong -> this
+    Stream.onConnectionCallbacks += ptr.toLong -> onConnection
     uv_listen(ptr, backlog, Stream.listenCallback)
   }
   def accept(client: Stream): CInt = uv_accept(ptr, client.ptr)
   def startRead(onRead: (Buffer, CSize) => Unit): CInt = {
-    this.onRead = onRead
-    // maybe I should add the stream to the map (assumption: it's already there)
+    Stream.onReadCallbacks += ptr.toLong -> onRead
     uv_read_start(ptr, Stream.allocCallback, Stream.readCallback)
   }
   def write(req: Write, buffers: Buffers, nbufs: CInt)(afterWrite: Int => Unit) = {
     val writePtrLong = req.ptr.toLong
-    Stream.afterWrites(writePtrLong) = afterWrite
-    Stream.writes += writePtrLong -> req
+    Stream.afterWriteCallbacks(writePtrLong) = afterWrite
     uv_write(req.ptr, ptr, buffers.ptr, nbufs, Stream.writeCallback)
   }
 }
 object Stream {
-  private val streams: mutable.Map[Long, Stream] = mutable.Map.empty
-  private val writes: mutable.Map[Long, Write] = mutable.Map.empty
-  private var afterWrites: mutable.Map[Long, Int => Unit] = mutable.Map.empty
+  private val onConnectionCallbacks: mutable.Map[Long, Int => Unit] = mutable.Map.empty
+  private val onReadCallbacks: mutable.Map[Long, (Buffer, CSize) => Unit] = mutable.Map.empty
+  private var afterWriteCallbacks: mutable.Map[Long, Int => Unit] = mutable.Map.empty
   private val listenCallback = new CFuncPtr2[Ptr[Byte], CInt, Unit] {
     def apply(stream: Ptr[Byte], status: CInt): Unit = { 
       val l: Long = (stream.toLong)
-      val s = Stream.streams(l)
-      s.onConnection(status)
+      Stream.onConnectionCallbacks(l)(status)
     }
   }
   private val allocCallback = new CFuncPtr3[Ptr[Byte], CSize, Ptr[uv_buf_t], Unit] {
@@ -150,15 +144,13 @@ object Stream {
   private val readCallback = new CFuncPtr3[Ptr[Byte], CSize, Ptr[uv_buf_t], Unit] {
     def apply(stream: Ptr[Byte], nread: CSize, buf: Ptr[uv_buf_t]): Unit = {
       val l: Long = (stream.toLong)
-      val s = Stream.streams(l)
-      s.onRead(new Buffer(buf), nread)
+      Stream.onReadCallbacks(l)(new Buffer(buf), nread)
     }
   }
   private val writeCallback = new CFuncPtr2[Ptr[Byte], CInt, Unit] {
     def apply(req: Ptr[Byte], status: CInt): Unit = {
       val l: Long = (req.toLong)
-      val w = Stream.writes(l)
-      afterWrites(l)(status)
+      afterWriteCallbacks(l)(status)
     }
   }
 }
