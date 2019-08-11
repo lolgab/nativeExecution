@@ -4,6 +4,7 @@ import scalanative.libc.stdlib.malloc
 import scala.scalanative.posix.netinet.in._
 import scala.collection.mutable
 import CApi._
+import scala.concurrent.Future
 
 class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
   def run(runMode: RunMode = RunMode.Default): Int = uv_run(ptr, runMode.value)
@@ -12,6 +13,7 @@ class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
 }
   
 object Loop {
+  Future(Loop.default.run())(scalanative.runtime.ExecutionContext.global)
   val default: Loop = new Loop(uv_default_loop())
 }
 
@@ -80,7 +82,7 @@ object Write {
 }
 class Handle private[libuv] (private val ptr: Ptr[Byte]) {
   def close(afterClose: () => Unit): Unit = {
-    Handle.afterCloses(!ptr.asInstanceOf[Ptr[Long]]) = afterClose
+    Handle.afterCloses(ptr.toLong) = afterClose
     uv_close(ptr, Handle.closeCallback)
   }
 }
@@ -88,7 +90,7 @@ object Handle {
   private val afterCloses: mutable.Map[Long, () => Unit] = mutable.Map.empty
   private val closeCallback = new CFuncPtr1[Ptr[Byte], Unit] {
     def apply(handle: Ptr[Byte]): Unit = {
-      val l = !handle.asInstanceOf[Ptr[Long]]
+      val l = handle.toLong
       afterCloses(l)()
     }
   }
@@ -99,7 +101,7 @@ class Stream private[libuv] (private val ptr: Ptr[Byte]) {
   private var onRead: (Buffer, CSize) => Unit = (_: Buffer, _: CSize) => ()
   def listen(backlog: Int = 128)(onConnection: Int => Unit): Int = {
     this.onConnection = onConnection
-    Stream.streams += !ptr.asInstanceOf[Ptr[Long]] -> this
+    Stream.streams += ptr.toLong -> this
     uv_listen(ptr, backlog, Stream.listenCallback)
   }
   def accept(client: Stream): CInt = uv_accept(ptr, client.ptr)
@@ -109,7 +111,7 @@ class Stream private[libuv] (private val ptr: Ptr[Byte]) {
     uv_read_start(ptr, Stream.allocCallback, Stream.readCallback)
   }
   def write(req: Write, buffers: Buffers, nbufs: CInt)(afterWrite: Int => Unit) = {
-    val writePtrLong = !req.ptr.asInstanceOf[Ptr[Long]]
+    val writePtrLong = req.ptr.toLong
     Stream.afterWrites(writePtrLong) = afterWrite
     Stream.writes += writePtrLong -> req
     uv_write(req.ptr, ptr, buffers.ptr, nbufs, Stream.writeCallback)
@@ -121,7 +123,7 @@ object Stream {
   private var afterWrites: mutable.Map[Long, Int => Unit] = mutable.Map.empty
   private val listenCallback = new CFuncPtr2[Ptr[Byte], CInt, Unit] {
     def apply(stream: Ptr[Byte], status: CInt): Unit = { 
-      val l: Long = !(stream.asInstanceOf[Ptr[Long]])
+      val l: Long = (stream.toLong)
       val s = Stream.streams(l)
       s.onConnection(status)
     }
@@ -135,14 +137,14 @@ object Stream {
   }
   private val readCallback = new CFuncPtr3[Ptr[Byte], CSize, Ptr[uv_buf_t], Unit] {
     def apply(stream: Ptr[Byte], nread: CSize, buf: Ptr[uv_buf_t]): Unit = {
-      val l: Long = !(stream.asInstanceOf[Ptr[Long]])
+      val l: Long = (stream.toLong)
       val s = Stream.streams(l)
       s.onRead(new Buffer(buf), nread)
     }
   }
   private val writeCallback = new CFuncPtr2[Ptr[Byte], CInt, Unit] {
     def apply(req: Ptr[Byte], status: CInt): Unit = {
-      val l: Long = !(req.asInstanceOf[Ptr[Long]])
+      val l: Long = (req.toLong)
       val w = Stream.writes(l)
       afterWrites(l)(status)
     }
@@ -179,48 +181,43 @@ object Ip4 {
     new Ip4(ptr)
   }
 }
-class PrepareHandle private (private val ptr: Ptr[Byte]) {
-  private var prepareCallback: () => Unit = () => ()
-
+class PrepareHandle private (private val ptr: Ptr[Byte]) extends AnyVal {
   def init(loop: Loop = Loop.default): Int = uv_prepare_init(loop.ptr, ptr)
   def start(callback: () => Unit): Int = {
-    prepareCallback = callback
-    PrepareHandle.prepares += !ptr.asInstanceOf[Ptr[Long]] -> this
+    PrepareHandle.callbacks += ptr.toLong -> callback
     uv_prepare_start(ptr, PrepareHandle.prepareCallback)
   }
   def stop(): CInt = uv_prepare_stop(ptr)
 }
 object PrepareHandle {
-  private val prepares: mutable.Map[Long, PrepareHandle] = mutable.Map.empty
+  private val callbacks: mutable.Map[Long, () => Unit] = mutable.Map.empty
   private val prepareCallback = new CFuncPtr1[Ptr[Byte], Unit] {
     def apply(prepare: Ptr[Byte]): Unit = {
-      val l: Long = !(prepare.asInstanceOf[Ptr[Long]])
-      val p = PrepareHandle.prepares(l)
-      p.prepareCallback()
+      val l: Long = (prepare.toLong)
+      PrepareHandle.callbacks(l)()
     }
   }
   def apply()(implicit z: Zone): PrepareHandle = {
     new PrepareHandle(z.alloc(uv_handle_size(HandleType.Prepare.value)))
   }
 }
-class TimerHandle private (private val ptr: Ptr[Byte]) {
-  private var timerCallback: () => Unit = () => ()
-
+class TimerHandle private (private val ptr: Ptr[Byte]) extends AnyVal {
   def init(loop: Loop = Loop.default): Int = uv_timer_init(loop.ptr, ptr)
   def start(callback: () => Unit, timeout: Long, repeat: Long): Int = {
-    timerCallback = callback
-    TimerHandle.timers += !ptr.asInstanceOf[Ptr[Long]] -> this
+    TimerHandle.callbacks += ptr.toLong -> callback
     uv_timer_start(ptr, TimerHandle.timerCallback, timeout, repeat)
   }
-  def stop(): CInt = uv_timer_stop(ptr)
+  def stop(): CInt = {
+    TimerHandle.callbacks -= ptr.toLong
+    uv_timer_stop(ptr)
+  }
 }
 object TimerHandle {
-  private val timers: mutable.Map[Long, TimerHandle] = mutable.Map.empty
+  private val callbacks: mutable.Map[Long, () => Unit] = mutable.Map.empty
   private val timerCallback = new CFuncPtr1[Ptr[Byte], Unit] {
     def apply(prepare: Ptr[Byte]): Unit = {
-      val l: Long = !(prepare.asInstanceOf[Ptr[Long]])
-      val p = TimerHandle.timers(l)
-      p.timerCallback()
+      val l: Long = prepare.toLong
+      val p = TimerHandle.callbacks(l)()
     }
   }
   def apply()(implicit z: Zone): TimerHandle = {
