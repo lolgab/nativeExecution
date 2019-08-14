@@ -4,8 +4,6 @@ import scalanative.libc.stdlib.malloc
 import scala.scalanative.posix.netinet.in._
 import scala.collection.mutable
 import CApi._
-import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
 
 class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
   def run(runMode: RunMode = RunMode.Default): Int = uv_run(ptr, runMode.value)
@@ -14,18 +12,17 @@ class Loop private (private[libuv] val ptr: Ptr[Byte]) extends AnyVal {
 }
   
 object Loop {
-  implicit val ec: ExecutionContext = scalanative.runtime.ExecutionContext.global
-  val loopFuture = Future(Loop.default.run())
-  loopFuture onComplete {
-    case Success(returnCode) =>
-      if(returnCode != 0) {
-        System.err.println(libuv.errorMessage(returnCode))
-        System.exit(returnCode)
+  scalanative.runtime.ExecutionContext.global.execute(
+    new Runnable {
+      def run(): Unit = {
+        val returnCode = Loop.default.run()
+        if(returnCode != 0) {
+          System.err.println(libuv.errorMessage(returnCode))
+          System.exit(returnCode)
+        }
       }
-    case Failure(e) =>
-      e.printStackTrace()
-      System.exit(1)
-  }
+    }
+  )
   val default: Loop = new Loop(uv_default_loop())
 }
 
